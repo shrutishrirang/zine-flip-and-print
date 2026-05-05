@@ -1,0 +1,1260 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>zine flip & print.</title>
+  <link
+    href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:wght@300;400;500&display=swap"
+    rel="stylesheet">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <style>
+    :root {
+      --bg: #f2ede8;
+      --surface: #ffffff;
+      --text: #1c1c1a;
+      --muted: #9a9590;
+      --accent: #3a6628;
+      --accent-light: #edf4e8;
+      --border: #e0d9d1;
+    }
+
+    *,
+    *::before,
+    *::after {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: 'DM Sans', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ─── HEADER ─── */
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 18px 32px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      position: sticky;
+      top: 0;
+      z-index: 10;
+    }
+
+    .logo {
+      font-family: 'DM Mono', monospace;
+      font-size: 17px;
+      color: var(--accent);
+      letter-spacing: -0.03em;
+    }
+
+    .header-btns {
+      display: flex;
+      gap: 8px;
+    }
+
+    .btn {
+      font-family: 'DM Sans', sans-serif;
+      font-size: 13px;
+      font-weight: 400;
+      padding: 7px 16px;
+      border-radius: 40px;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--text);
+      cursor: pointer;
+      transition: border-color 0.15s, color 0.15s, background 0.15s;
+      white-space: nowrap;
+    }
+
+    .btn:hover {
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+
+    .btn-primary {
+      background: var(--accent);
+      color: #fff;
+      border-color: var(--accent);
+    }
+
+    .btn-primary:hover {
+      background: #2b4f1d;
+      border-color: #2b4f1d;
+      color: #fff;
+    }
+
+    /* ─── UPLOAD SECTION ─── */
+    .upload-section {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 20px 32px 24px;
+      transition: all 0.2s;
+    }
+
+    .upload-section.hidden {
+      display: none;
+    }
+
+    .upload-meta {
+      font-size: 11px;
+      font-weight: 500;
+      letter-spacing: 0.07em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 12px;
+    }
+
+    .upload-grid {
+      display: grid;
+      grid-template-columns: repeat(8, 1fr);
+      gap: 8px;
+    }
+
+    .upload-slot {
+      aspect-ratio: 210 / 297;
+      border: 1.5px dashed var(--border);
+      border-radius: 6px;
+      background: #faf8f5;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      position: relative;
+      overflow: hidden;
+      transition: border-color 0.15s, background 0.15s;
+    }
+
+    .upload-slot:hover {
+      border-color: var(--accent);
+      background: var(--accent-light);
+    }
+
+    .upload-slot.loaded {
+      border-style: solid;
+      border-color: #b5cfa8;
+    }
+
+    .upload-slot input[type=file] {
+      position: absolute;
+      inset: 0;
+      opacity: 0;
+      cursor: pointer;
+      width: 100%;
+      height: 100%;
+    }
+
+    .slot-preview {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: none;
+    }
+
+    .slot-preview.visible {
+      display: block;
+    }
+
+    .slot-plus {
+      font-size: 16px;
+      color: #ccc;
+      line-height: 1;
+      position: relative;
+      z-index: 1;
+    }
+
+    .slot-lbl {
+      font-size: 9px;
+      font-family: 'DM Mono', monospace;
+      color: var(--muted);
+      margin-top: 4px;
+      position: relative;
+      z-index: 1;
+      background: rgba(255, 255, 255, 0.8);
+      padding: 1px 4px;
+      border-radius: 3px;
+    }
+
+    .upload-slot.loaded .slot-lbl {
+      background: rgba(255, 255, 255, 0.7);
+    }
+
+    /* ─── MAIN AREA ─── */
+    .main {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 32px 16px 48px;
+      gap: 0;
+    }
+
+    /* ─── VIEWER ─── */
+    .viewer-outer {
+      width: min(680px, 94vw);
+      position: relative;
+    }
+
+    .viewer-square {
+      width: 100%;
+      aspect-ratio: 4 / 3;
+      position: relative;
+      border-radius: 3px;
+      overflow: hidden;
+    }
+
+    .viewer-bg {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+    }
+
+    /* vignette overlay for surface depth */
+    .viewer-vignette {
+      position: absolute;
+      inset: 0;
+      background: radial-gradient(ellipse at center, transparent 55%, rgba(0, 0, 0, 0.18) 100%);
+      pointer-events: none;
+      z-index: 1;
+    }
+
+    .viewer-stage {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 2;
+    }
+
+    /* ─── ZINE RENDERS ─── */
+    .zine-single {
+      height: 70%;
+      aspect-ratio: 210 / 297;
+      border-radius: 2px;
+      overflow: hidden;
+      box-shadow:
+        0 2px 4px rgba(0, 0, 0, 0.06),
+        0 8px 20px rgba(0, 0, 0, 0.16),
+        0 24px 52px rgba(0, 0, 0, 0.14),
+        0 1px 1px rgba(0, 0, 0, 0.04);
+    }
+
+    .zine-single img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+
+    .zine-spread {
+      height: 70%;
+      aspect-ratio: 420 / 297;
+      display: flex;
+      border-radius: 2px;
+      overflow: hidden;
+      box-shadow:
+        0 2px 4px rgba(0, 0, 0, 0.06),
+        0 10px 28px rgba(0, 0, 0, 0.16),
+        0 28px 56px rgba(0, 0, 0, 0.13),
+        0 1px 1px rgba(0, 0, 0, 0.04);
+    }
+
+    .zine-page {
+      flex: 1;
+      overflow: hidden;
+      position: relative;
+    }
+
+    .zine-page img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+
+    .zine-spine {
+      width: 4px;
+      flex-shrink: 0;
+      background: linear-gradient(to right, rgba(0, 0, 0, 0.18), rgba(0, 0, 0, 0.06));
+      position: relative;
+    }
+
+    .zine-spine::before {
+      content: '';
+      position: absolute;
+      left: 0;
+      top: 0;
+      bottom: 0;
+      width: 1px;
+      background: rgba(0, 0, 0, 0.12);
+    }
+
+    .zine-spine::after {
+      content: '';
+      position: absolute;
+      right: 0;
+      top: 0;
+      bottom: 0;
+      width: 1px;
+      background: rgba(255, 255, 255, 0.15);
+    }
+
+    /* placeholder when no images uploaded */
+    .zine-placeholder {
+      height: 70%;
+      aspect-ratio: 420 / 297;
+      border: 2px dashed rgba(255, 255, 255, 0.4);
+      border-radius: 4px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+    }
+
+    .zine-placeholder p {
+      font-size: 13px;
+      color: rgba(255, 255, 255, 0.6);
+      text-align: center;
+      padding: 0 24px;
+      line-height: 1.5;
+    }
+
+    /* ─── NAV BAR ─── */
+    .nav-bar {
+      width: min(680px, 94vw);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 14px 0 0;
+    }
+
+    .nav-left {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .nav-btn {
+      font-family: 'DM Mono', monospace;
+      font-size: 13px;
+      padding: 7px 16px;
+      border-radius: 40px;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--text);
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+
+    .nav-btn:hover:not(:disabled) {
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+
+    .nav-btn:disabled {
+      opacity: 0.28;
+      cursor: not-allowed;
+    }
+
+    .nav-label {
+      font-family: 'DM Mono', monospace;
+      font-size: 12px;
+      color: var(--muted);
+      min-width: 80px;
+      text-align: center;
+    }
+
+    .nav-right {
+      display: flex;
+      gap: 8px;
+    }
+
+    /* ─── CUSTOMIZER ─── */
+    .customizer {
+      width: min(680px, 94vw);
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 18px 20px 16px;
+      margin-top: 12px;
+      display: none;
+    }
+
+    .customizer.open {
+      display: block;
+    }
+
+    .cust-title {
+      font-size: 10px;
+      font-weight: 500;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--muted);
+      margin-bottom: 14px;
+    }
+
+    .cust-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+
+    .cust-row:last-child {
+      margin-bottom: 0;
+    }
+
+    .cust-label {
+      font-size: 13px;
+      color: var(--muted);
+      width: 54px;
+      flex-shrink: 0;
+    }
+
+    .pattern-pills {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+
+    .pill {
+      font-family: 'DM Sans', sans-serif;
+      font-size: 12px;
+      padding: 5px 13px;
+      border-radius: 40px;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+
+    .pill:hover {
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+
+    .pill.active {
+      background: var(--accent);
+      color: #fff;
+      border-color: var(--accent);
+    }
+
+    input[type=color] {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 30px;
+      height: 30px;
+      border: 1px solid var(--border);
+      border-radius: 50%;
+      cursor: pointer;
+      padding: 2px;
+      background: none;
+    }
+
+    input[type=color]::-webkit-color-swatch-wrapper {
+      padding: 0;
+    }
+
+    input[type=color]::-webkit-color-swatch {
+      border: none;
+      border-radius: 50%;
+    }
+
+    /* ─── PRINT OVERLAY ─── */
+    .print-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(10, 10, 8, 0.65);
+      z-index: 50;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+
+    .print-overlay.open {
+      display: flex;
+    }
+
+    .print-modal {
+      background: var(--surface);
+      border-radius: 14px;
+      width: 100%;
+      max-width: 920px;
+      max-height: 92vh;
+      overflow-y: auto;
+      padding: 28px 28px 32px;
+    }
+
+    .modal-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 20px;
+    }
+
+    .modal-title {
+      font-family: 'DM Mono', monospace;
+      font-size: 16px;
+      color: var(--accent);
+    }
+
+    .modal-actions {
+      display: flex;
+      gap: 8px;
+    }
+
+    .print-tabs {
+      display: flex;
+      gap: 6px;
+      margin-bottom: 20px;
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 14px;
+    }
+
+    .ptab {
+      font-family: 'DM Sans', sans-serif;
+      font-size: 13px;
+      padding: 6px 16px;
+      border-radius: 40px;
+      border: 1px solid var(--border);
+      background: none;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+
+    .ptab:hover {
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+
+    .ptab.active {
+      background: var(--accent);
+      color: #fff;
+      border-color: var(--accent);
+    }
+
+    /* A4 landscape imposition — 297:210 ratio */
+    .print-a4 {
+      width: 100%;
+      aspect-ratio: 297 / 210;
+      background: #fff;
+      border: 1px solid #d8d2c8;
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      grid-template-rows: repeat(2, 1fr);
+      position: relative;
+    }
+
+    .print-cell {
+      border: 0.5px solid #d0cac0;
+      position: relative;
+      overflow: hidden;
+      background: #f9f7f4;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .print-cell img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+
+    .print-cell.inv img {
+      transform: rotate(180deg);
+    }
+
+    .cell-lbl {
+      position: absolute;
+      bottom: 5px;
+      right: 7px;
+      font-size: 8px;
+      font-family: 'DM Mono', monospace;
+      color: #c0bab0;
+      pointer-events: none;
+      background: rgba(255, 255, 255, 0.7);
+      padding: 1px 3px;
+      border-radius: 2px;
+    }
+
+    .print-cell.inv .cell-lbl {
+      bottom: auto;
+      right: auto;
+      top: 5px;
+      left: 7px;
+      transform: rotate(180deg);
+    }
+
+    .cell-empty {
+      font-size: 10px;
+      font-family: 'DM Mono', monospace;
+      color: #d0cac0;
+    }
+
+    /* Cut marks */
+    .cut-marks {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+    }
+
+    .cut-h,
+    .cut-v {
+      position: absolute;
+      background: rgba(0, 0, 0, 0.3);
+    }
+
+    .cut-h {
+      height: 1px;
+      left: 0;
+      right: 0;
+    }
+
+    .cut-v {
+      width: 1px;
+      top: 0;
+      bottom: 0;
+    }
+
+    .print-note {
+      font-size: 12px;
+      font-family: 'DM Mono', monospace;
+      color: var(--muted);
+      margin-top: 14px;
+      line-height: 1.6;
+    }
+
+    /* Side 2 upload */
+    .side2-zone {
+      width: 100%;
+      aspect-ratio: 297 / 210;
+      border: 2px dashed var(--border);
+      border-radius: 8px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      position: relative;
+      overflow: hidden;
+      background: #faf8f5;
+      transition: border-color 0.15s;
+    }
+
+    .side2-zone:hover {
+      border-color: var(--accent);
+    }
+
+    .side2-zone input {
+      position: absolute;
+      inset: 0;
+      opacity: 0;
+      cursor: pointer;
+      width: 100%;
+      height: 100%;
+    }
+
+    .side2-zone img {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: none;
+    }
+
+    .side2-zone img.visible {
+      display: block;
+    }
+
+    .side2-hint {
+      text-align: center;
+      pointer-events: none;
+    }
+
+    .side2-hint p {
+      font-size: 14px;
+      color: var(--muted);
+    }
+
+    .side2-hint span {
+      font-size: 12px;
+      color: #ccc;
+      font-family: 'DM Mono', monospace;
+      display: block;
+      margin-top: 6px;
+    }
+
+    @page {
+      size: A4 landscape;
+      margin: 0;
+    }
+
+    /* Print media */
+    @media print {
+
+      html,
+      body {
+        width: 297mm;
+        height: 210mm;
+        margin: 0;
+        padding: 0;
+        background: white;
+      }
+
+      body>*:not(#printBody) {
+        display: none !important;
+      }
+
+      #printBody {
+        display: block !important;
+        position: static;
+        width: 297mm;
+        padding: 0;
+        margin: 0;
+        background: white;
+      }
+
+      #printBody .print-a4 {
+        width: 297mm;
+        height: 210mm;
+        page-break-after: always;
+        margin: 0;
+        border: none;
+      }
+
+      #printBody .print-a4:last-child {
+        page-break-after: avoid;
+      }
+    }
+  </style>
+</head>
+
+<body>
+
+  <header>
+    <div class="logo">zine flip & print.</div>
+    <div class="header-btns">
+      <button class="btn" id="toggleUploadBtn" onclick="toggleUpload()">↑ pages</button>
+      <button class="btn btn-primary" onclick="openPrint()">print layout →</button>
+    </div>
+  </header>
+
+  <!-- Upload -->
+  <div class="upload-section" id="uploadSection">
+    <div class="upload-meta">upload 8 pages in order — front cover first, back cover last</div>
+    <div class="upload-grid" id="uploadGrid"></div>
+  </div>
+
+  <!-- Main -->
+  <div class="main">
+    <div class="viewer-outer">
+
+      <!-- 1:1 Viewer -->
+      <div class="viewer-square" id="viewerSquare">
+        <canvas class="viewer-bg" id="viewerBg"></canvas>
+        <div class="viewer-vignette"></div>
+        <div class="viewer-stage" id="viewerStage">
+          <!-- rendered by JS -->
+        </div>
+      </div>
+
+      <!-- Nav -->
+      <div class="nav-bar">
+        <div class="nav-left">
+          <button class="nav-btn" id="prevBtn" onclick="navigate(-1)">← prev</button>
+          <div class="nav-label" id="navLabel">— / —</div>
+          <button class="nav-btn" id="nextBtn" onclick="navigate(1)">next →</button>
+        </div>
+        <div class="nav-right">
+          <button class="btn" id="downloadBtn" onclick="downloadView()">↓ save</button>
+          <button class="btn" onclick="toggleCustomizer()">◎ background</button>
+        </div>
+      </div>
+
+      <!-- Customizer -->
+      <div class="customizer" id="customizer">
+        <div class="cust-title">background</div>
+        <div class="cust-row">
+          <span class="cust-label">colour</span>
+          <input type="color" id="bgColor" value="#b8c9a4" oninput="onColorInput()">
+          <span style="font-size:12px;color:var(--muted);">base colour for your pattern</span>
+        </div>
+        <div class="cust-row">
+          <span class="cust-label">pattern</span>
+          <div class="pattern-pills" id="patternPills">
+            <button class="pill active" data-pattern="gingham" onclick="setPattern(this)">gingham</button>
+            <button class="pill" data-pattern="dots" onclick="setPattern(this)">dots</button>
+            <button class="pill" data-pattern="stripes" onclick="setPattern(this)">stripes</button>
+            <button class="pill" data-pattern="crosshatch" onclick="setPattern(this)">crosshatch</button>
+            <button class="pill" data-pattern="herringbone" onclick="setPattern(this)">herringbone</button>
+            <button class="pill" data-pattern="solid" onclick="setPattern(this)">solid</button>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- Print overlay -->
+  <div class="print-overlay" id="printOverlay" onclick="bgClose(event)">
+    <div class="print-modal" id="printModal">
+      <div class="modal-header">
+        <span class="modal-title">print layout</span>
+        <div class="modal-actions">
+          <button class="btn btn-primary" onclick="triggerPrint()">print ↗</button>
+          <button class="btn" onclick="closePrint()">✕</button>
+        </div>
+      </div>
+
+      <div class="print-tabs">
+        <button class="ptab active" onclick="switchPrintTab(1,this)">side 1 — imposition</button>
+        <button class="ptab" onclick="switchPrintTab(2,this)">side 2 — back of sheet</button>
+      </div>
+
+      <div id="printSide1">
+        <div class="print-a4" id="printLayout"></div>
+        <p class="print-note">
+          print at A4 landscape · fold in half vertically, then horizontally · cut along the center horizontal fold to
+          release the pages
+        </p>
+      </div>
+
+      <div id="printSide2" style="display:none;">
+        <div class="side2-zone" id="side2Zone">
+          <input type="file" accept="image/*" onchange="loadSide2(this)">
+          <img id="side2Img">
+          <div class="side2-hint" id="side2Hint">
+            <p>click to upload back-of-sheet image</p>
+            <span>A4 landscape · 297 × 210 mm</span>
+          </div>
+        </div>
+        <p class="print-note" style="margin-top:14px;">
+          this is the second side of your printed sheet — great for a colophon, instructions, or a full-bleed design.
+        </p>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // ─── STATE ───────────────────────────────────────────────────────
+    const pages = new Array(8).fill(null);
+    let currentView = 0;
+    let currentPattern = 'stripes';
+    let currentColor = '#F9D9DC';
+
+    const VIEWS = 5;
+    const VIEW_LABELS = [
+      'front cover',
+      'pages 2 — 3',
+      'pages 4 — 5',
+      'pages 6 — 7',
+      'back cover'
+    ];
+
+    // ─── UPLOAD GRID ─────────────────────────────────────────────────
+    (function buildGrid() {
+      const grid = document.getElementById('uploadGrid');
+      const labels = ['1 · front', '2', '3', '4', '5', '6', '7', '8 · back'];
+      labels.forEach((lbl, i) => {
+        const slot = document.createElement('div');
+        slot.className = 'upload-slot';
+        slot.id = `slot${i}`;
+        slot.innerHTML = `<span class="slot-plus">+</span><span class="slot-lbl">${lbl}</span><input type="file" accept="image/*">`;
+        slot.querySelector('input').addEventListener('change', e => loadPage(i, e.target));
+        grid.appendChild(slot);
+      });
+    })();
+
+    function loadPage(i, input) {
+      const file = input.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = e => {
+        pages[i] = e.target.result;
+        // update slot thumbnail
+        const slot = document.getElementById(`slot${i}`);
+        slot.classList.add('loaded');
+        let img = slot.querySelector('img.slot-preview');
+        if (!img) {
+          img = document.createElement('img');
+          img.className = 'slot-preview';
+          slot.prepend(img);
+        }
+        img.src = pages[i];
+        img.classList.add('visible');
+        renderView();
+        renderPrintLayout();
+      };
+      reader.readAsDataURL(file);
+    }
+
+    // ─── VIEWER ──────────────────────────────────────────────────────
+    function navigate(dir) {
+      currentView = Math.max(0, Math.min(VIEWS - 1, currentView + dir));
+      renderView();
+    }
+
+    function renderView() {
+      const stage = document.getElementById('viewerStage');
+      const lbl = document.getElementById('navLabel');
+      const prev = document.getElementById('prevBtn');
+      const next = document.getElementById('nextBtn');
+
+      prev.disabled = currentView === 0;
+      next.disabled = currentView === VIEWS - 1;
+      lbl.textContent = VIEW_LABELS[currentView];
+
+      const hasAny = pages.some(Boolean);
+
+      if (!hasAny) {
+        stage.innerHTML = `<div class="zine-placeholder"><p>upload your 8 pages above to preview your zine</p></div>`;
+        return;
+      }
+
+      if (currentView === 0) {
+        // Front cover — single page
+        stage.innerHTML = `<div class="zine-single">${pageImg(0, 'front cover')}</div>`;
+      } else if (currentView === 4) {
+        // Back cover — single page
+        stage.innerHTML = `<div class="zine-single">${pageImg(7, 'back cover')}</div>`;
+      } else {
+        // Spread: view1→idx1,2 | view2→idx3,4 | view3→idx5,6
+        const li = (currentView - 1) * 2 + 1;
+        const ri = li + 1;
+        stage.innerHTML = `
+      <div class="zine-spread">
+        <div class="zine-page">${pageImg(li, `page ${li + 1}`)}</div>
+        <div class="zine-spine"></div>
+        <div class="zine-page">${pageImg(ri, `page ${ri + 1}`)}</div>
+      </div>`;
+      }
+    }
+
+    function pageImg(idx, alt) {
+      if (pages[idx]) return `<img src="${pages[idx]}" alt="${alt}" draggable="false">`;
+      return `<div style="width:100%;height:100%;background:rgba(255,255,255,0.3);display:flex;align-items:center;justify-content:center;"><span style="font-size:11px;font-family:'DM Mono',monospace;color:rgba(255,255,255,0.5);">${alt}</span></div>`;
+    }
+
+    // ─── DOWNLOAD ─────────────────────────────────────────────────────
+    function downloadView() {
+      const viewer = document.getElementById('viewerSquare');
+      const btn = document.getElementById('downloadBtn');
+      const label = VIEW_LABELS[currentView].replace(/[^a-z0-9]+/gi, '-').toLowerCase();
+      btn.textContent = '…';
+      btn.disabled = true;
+      html2canvas(viewer, { useCORS: true, scale: 2 }).then(canvas => {
+        const a = document.createElement('a');
+        a.href = canvas.toDataURL('image/png');
+        a.download = `zine-${label}.png`;
+        a.click();
+        btn.textContent = '↓ save';
+        btn.disabled = false;
+      });
+    }
+
+    function drawPatternCanvas(ctx, W, H, pattern, color) {
+      const { r, g, b } = hexToRgb(color);
+      const dkA = `rgba(${Math.round(r * 0.7)},${Math.round(g * 0.7)},${Math.round(b * 0.7)},0.65)`;
+      const dk = darken(color, 0.68);
+
+      // Base colour fill
+      ctx.fillStyle = color;
+      ctx.fillRect(0, 0, W, H);
+
+      if (pattern === 'solid') return Promise.resolve();
+
+      if (pattern === 'dots') {
+        const step = 20, dotR = 2.5;
+        ctx.fillStyle = dkA;
+        for (let y = step / 2; y < H; y += step)
+          for (let x = step / 2; x < W; x += step) {
+            ctx.beginPath();
+            ctx.arc(x, y, dotR, 0, Math.PI * 2);
+            ctx.fill();
+          }
+        return Promise.resolve();
+      }
+
+      if (pattern === 'stripes') {
+        ctx.strokeStyle = dkA;
+        ctx.lineWidth = 1.5;
+        for (let d = -H; d < W + H; d += 20) {
+          ctx.beginPath(); ctx.moveTo(d, 0); ctx.lineTo(d + H, H); ctx.stroke();
+        }
+        return Promise.resolve();
+      }
+
+      if (pattern === 'crosshatch') {
+        ctx.strokeStyle = dkA;
+        ctx.lineWidth = 1;
+        const step = 22;
+        for (let y = 0; y < H; y += step) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke(); }
+        for (let x = 0; x < W; x += step) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke(); }
+        return Promise.resolve();
+      }
+
+      if (pattern === 'gingham') {
+        const sq = `rgba(${Math.round(r * 0.72)},${Math.round(g * 0.72)},${Math.round(b * 0.72)},0.58)`;
+        const wh = `rgba(255,255,255,0.44)`;
+        const tile = document.createElement('canvas');
+        tile.width = tile.height = 40;
+        const tc = tile.getContext('2d');
+        tc.fillStyle = color; tc.fillRect(0, 0, 40, 40);
+        tc.fillStyle = sq; tc.fillRect(0, 0, 20, 20); tc.fillRect(20, 20, 20, 20);
+        tc.fillStyle = wh; tc.fillRect(20, 0, 20, 20); tc.fillRect(0, 20, 20, 20);
+        ctx.fillStyle = ctx.createPattern(tile, 'repeat');
+        ctx.fillRect(0, 0, W, H);
+        return Promise.resolve();
+      }
+
+      if (pattern === 'herringbone') {
+        const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24'>`
+          + `<path d='M0 12 L6 0 L12 12 L6 24Z' fill='${dk}' opacity='0.4'/>`
+          + `<path d='M12 12 L18 0 L24 12 L18 24Z' fill='${dk}' opacity='0.25'/></svg>`;
+        return new Promise(resolve => {
+          const img = new Image();
+          img.onload = () => {
+            const tile = document.createElement('canvas');
+            tile.width = tile.height = 24;
+            tile.getContext('2d').drawImage(img, 0, 0);
+            ctx.fillStyle = ctx.createPattern(tile, 'repeat');
+            ctx.fillRect(0, 0, W, H);
+            resolve();
+          };
+          img.src = 'data:image/svg+xml,' + encodeURIComponent(svg);
+        });
+      }
+
+      return Promise.resolve();
+    }
+
+    // ─── BACKGROUND ──────────────────────────────────────────────────
+    function hexToRgb(hex) {
+      const n = parseInt(hex.slice(1), 16);
+      return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
+    }
+
+    function darken(hex, f) {
+      const { r, g, b } = hexToRgb(hex);
+      return `rgb(${Math.round(r * f)},${Math.round(g * f)},${Math.round(b * f)})`;
+    }
+
+    function mkSvgUrl(svg) {
+      return `url("data:image/svg+xml,${encodeURIComponent(svg)}")`;
+    }
+
+    function getPatternStyle(pattern, color) {
+      const dk = darken(color, 0.68);
+      const dkStr = darken(color, 0.72);
+      const { r, g, b } = hexToRgb(color);
+      const dkA = `rgba(${Math.round(r * 0.7)},${Math.round(g * 0.7)},${Math.round(b * 0.7)},0.65)`;
+
+      switch (pattern) {
+        case 'gingham': {
+          const sq = `rgba(${Math.round(r * 0.72)},${Math.round(g * 0.72)},${Math.round(b * 0.72)},0.58)`;
+          const wh = `rgba(255,255,255,0.44)`;
+          const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='40' height='40'><rect width='40' height='40' fill='${color}'/><rect x='0' y='0' width='20' height='20' fill='${sq}'/><rect x='20' y='20' width='20' height='20' fill='${sq}'/><rect x='20' y='0' width='20' height='20' fill='${wh}'/><rect x='0' y='20' width='20' height='20' fill='${wh}'/></svg>`;
+          return { backgroundColor: color, backgroundImage: mkSvgUrl(svg), backgroundSize: '40px 40px' };
+        }
+        case 'dots':
+          return {
+            backgroundColor: color,
+            backgroundImage: `radial-gradient(circle, ${dkA} 2.5px, transparent 2.5px)`,
+            backgroundSize: '20px 20px'
+          };
+        case 'stripes':
+          return {
+            backgroundColor: color,
+            backgroundImage: `repeating-linear-gradient(45deg, ${dkA} 0, ${dkA} 1.5px, transparent 0, transparent 50%)`,
+            backgroundSize: '40px 40px'
+          };
+        case 'crosshatch':
+          return {
+            backgroundColor: color,
+            backgroundImage: `
+          repeating-linear-gradient(0deg, ${dkA} 0, ${dkA} 1px, transparent 0, transparent 100%),
+          repeating-linear-gradient(90deg, ${dkA} 0, ${dkA} 1px, transparent 0, transparent 100%)
+        `,
+            backgroundSize: '22px 22px'
+          };
+        case 'herringbone': {
+          const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24'><path d='M0 12 L6 0 L12 12 L6 24Z' fill='${dk}' opacity='0.4'/><path d='M12 12 L18 0 L24 12 L18 24Z' fill='${dk}' opacity='0.25'/></svg>`;
+          return { backgroundColor: color, backgroundImage: mkSvgUrl(svg), backgroundSize: '24px 24px' };
+        }
+        case 'solid':
+        default:
+          return { backgroundColor: color };
+      }
+    }
+
+    function applyBackground() {
+      const bg = document.getElementById('viewerBg');
+      // Size the canvas to match its rendered CSS dimensions
+      bg.width = bg.offsetWidth || bg.parentElement.offsetWidth;
+      bg.height = bg.offsetHeight || bg.parentElement.offsetHeight;
+      drawPatternCanvas(bg.getContext('2d'), bg.width, bg.height, currentPattern, currentColor);
+    }
+
+    function onColorInput() {
+      currentColor = document.getElementById('bgColor').value;
+      applyBackground();
+    }
+
+    function setPattern(btn) {
+      currentPattern = btn.dataset.pattern;
+      document.querySelectorAll('.pill').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      applyBackground();
+    }
+
+    // ─── UI TOGGLES ──────────────────────────────────────────────────
+    function toggleUpload() {
+      document.getElementById('uploadSection').classList.toggle('hidden');
+    }
+
+    function toggleCustomizer() {
+      document.getElementById('customizer').classList.toggle('open');
+    }
+
+    // ─── PRINT LAYOUT ────────────────────────────────────────────────
+    // Top row (inverted): page 7 (idx6), page 6 (idx5), page 5 (idx4), page 4 (idx3)
+    // Bottom row (normal): back (idx7), front (idx0), page 2 (idx1), page 3 (idx2)
+    const PRINT_TOP = [6, 5, 4, 3];
+    const PRINT_BOTTOM = [7, 0, 1, 2];
+    const PRINT_TOP_LBL = ['pg 7', 'pg 6', 'pg 5', 'pg 4'];
+    const PRINT_BOTTOM_LBL = ['back', 'front', 'pg 2', 'pg 3'];
+
+    function renderPrintLayout() {
+      const layout = document.getElementById('printLayout');
+      if (!layout) return;
+      let html = '';
+
+      PRINT_TOP.forEach((idx, i) => {
+        html += `<div class="print-cell inv">
+      ${pages[idx]
+            ? `<img src="${pages[idx]}" alt="">`
+            : `<span class="cell-empty">${PRINT_TOP_LBL[i]}</span>`}
+      <span class="cell-lbl">${PRINT_TOP_LBL[i]}</span>
+    </div>`;
+      });
+
+      PRINT_BOTTOM.forEach((idx, i) => {
+        html += `<div class="print-cell">
+      ${pages[idx]
+            ? `<img src="${pages[idx]}" alt="">`
+            : `<span class="cell-empty">${PRINT_BOTTOM_LBL[i]}</span>`}
+      <span class="cell-lbl">${PRINT_BOTTOM_LBL[i]}</span>
+    </div>`;
+      });
+
+      // Add cut marks overlay
+      html += `<div class="cut-marks">
+    <div class="cut-h" style="top:50%;"></div>
+    <div class="cut-v" style="left:25%;"></div>
+    <div class="cut-v" style="left:50%;"></div>
+    <div class="cut-v" style="left:75%;"></div>
+  </div>`;
+
+      layout.innerHTML = html;
+    }
+
+    function openPrint() {
+      renderPrintLayout();
+      document.getElementById('printOverlay').classList.add('open');
+    }
+
+    function closePrint() {
+      document.getElementById('printOverlay').classList.remove('open');
+    }
+
+    function bgClose(e) {
+      if (e.target === document.getElementById('printOverlay')) closePrint();
+    }
+
+    function switchPrintTab(side, btn) {
+      document.querySelectorAll('.ptab').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      document.getElementById('printSide1').style.display = side === 1 ? '' : 'none';
+      document.getElementById('printSide2').style.display = side === 2 ? '' : 'none';
+    }
+
+    function loadSide2(input) {
+      const file = input.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = e => {
+        const img = document.getElementById('side2Img');
+        img.src = e.target.result;
+        img.classList.add('visible');
+        document.getElementById('side2Hint').style.display = 'none';
+      };
+      reader.readAsDataURL(file);
+    }
+
+    async function triggerPrint() {
+      const btn = document.querySelector('.modal-actions .btn-primary');
+      const origText = btn.textContent;
+      btn.textContent = 'generating pdf…';
+      btn.disabled = true;
+
+      try {
+        const { jsPDF } = window.jspdf;
+        const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+        // A4 landscape: 297mm wide × 210mm tall
+        const W = 297, H = 210;
+
+        // ── Side 1: capture the live print layout ──
+        const layout1 = document.getElementById('printLayout');
+        const canvas1 = await html2canvas(layout1, {
+          scale: 3,
+          useCORS: true,
+          backgroundColor: '#ffffff',
+          logging: false
+        });
+        doc.addImage(canvas1.toDataURL('image/jpeg', 0.97), 'JPEG', 0, 0, W, H);
+
+        // ── Side 2: add raw image if uploaded ──
+        const side2Img = document.getElementById('side2Img');
+        if (side2Img && side2Img.classList.contains('visible') && side2Img.src) {
+          doc.addPage();
+          doc.addImage(side2Img.src, 'JPEG', 0, 0, W, H);
+        }
+
+        doc.save('zine-print-layout.pdf');
+      } catch (err) {
+        console.error('PDF generation failed:', err);
+        alert('PDF generation failed. Please try again.');
+      } finally {
+        btn.textContent = origText;
+        btn.disabled = false;
+      }
+    }
+
+    // ─── INIT ────────────────────────────────────────────────────────
+    renderView();
+    requestAnimationFrame(applyBackground);
+    window.addEventListener('resize', applyBackground);
+  </script>
+</body>
+
+</html>
