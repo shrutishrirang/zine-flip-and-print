@@ -693,26 +693,6 @@
       transform: rotate(180deg);
     }
 
-    .cell-lbl {
-      position: absolute;
-      bottom: 5px;
-      right: 7px;
-      font-size: 8px;
-      font-family: 'DM Mono', monospace;
-      color: #c0bab0;
-      pointer-events: none;
-      background: rgba(255, 255, 255, 0.7);
-      padding: 1px 3px;
-      border-radius: 2px;
-    }
-
-    .print-cell.inv .cell-lbl {
-      bottom: auto;
-      right: auto;
-      top: 5px;
-      left: 7px;
-      transform: rotate(180deg);
-    }
 
     .cell-empty {
       font-size: 10px;
@@ -1402,7 +1382,6 @@
       ${pages[idx]
             ? `<img src="${pages[idx]}" alt="">`
             : `<span class="cell-empty">${PRINT_TOP_LBL[i]}</span>`}
-      <span class="cell-lbl">${PRINT_TOP_LBL[i]}</span>
     </div>`;
       });
 
@@ -1411,7 +1390,6 @@
       ${pages[idx]
             ? `<img src="${pages[idx]}" alt="">`
             : `<span class="cell-empty">${PRINT_BOTTOM_LBL[i]}</span>`}
-      <span class="cell-lbl">${PRINT_BOTTOM_LBL[i]}</span>
     </div>`;
       });
 
