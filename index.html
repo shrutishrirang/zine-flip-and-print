@@ -115,6 +115,77 @@
       margin-bottom: 12px;
     }
 
+    /* ─── BULK UPLOAD DROP ZONE ─── */
+    .bulk-drop-zone {
+      border: 1.5px dashed var(--border);
+      border-radius: 10px;
+      background: #faf8f5;
+      padding: 16px 20px;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      margin-bottom: 12px;
+      cursor: pointer;
+      position: relative;
+      transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
+    }
+
+    .bulk-drop-zone:hover,
+    .bulk-drop-zone.drag-active {
+      border-color: var(--accent);
+      background: var(--accent-light);
+      box-shadow: 0 0 0 3px rgba(58, 102, 40, 0.08);
+    }
+
+    .bulk-drop-zone input[type=file] {
+      position: absolute;
+      inset: 0;
+      opacity: 0;
+      cursor: pointer;
+      width: 100%;
+      height: 100%;
+    }
+
+    .bulk-drop-icon {
+      font-size: 22px;
+      line-height: 1;
+      flex-shrink: 0;
+      pointer-events: none;
+    }
+
+    .bulk-drop-text {
+      pointer-events: none;
+    }
+
+    .bulk-drop-text strong {
+      display: block;
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--text);
+      margin-bottom: 2px;
+    }
+
+    .bulk-drop-text span {
+      font-size: 11px;
+      font-family: 'DM Mono', monospace;
+      color: var(--muted);
+    }
+
+    .bulk-progress {
+      margin-left: auto;
+      flex-shrink: 0;
+      font-size: 11px;
+      font-family: 'DM Mono', monospace;
+      color: var(--accent);
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 0.2s;
+    }
+
+    .bulk-progress.visible {
+      opacity: 1;
+    }
+
     .upload-grid {
       display: grid;
       grid-template-columns: repeat(8, 1fr);
@@ -190,6 +261,45 @@
 
     .upload-slot.loaded .slot-lbl {
       background: rgba(255, 255, 255, 0.7);
+    }
+
+    /* ─── DRAG REORDER ─── */
+    .upload-slot.loaded {
+      cursor: grab;
+    }
+
+    .upload-slot.loaded:active {
+      cursor: grabbing;
+    }
+
+    .upload-slot.dragging {
+      opacity: 0.38;
+      transform: scale(0.96);
+      transition: opacity 0.15s, transform 0.15s;
+    }
+
+    .upload-slot.drag-over {
+      border-color: var(--accent) !important;
+      background: var(--accent-light) !important;
+      box-shadow: 0 0 0 2px var(--accent);
+    }
+
+    .drag-hint {
+      position: absolute;
+      top: 5px;
+      left: 50%;
+      transform: translateX(-50%);
+      font-size: 9px;
+      color: var(--accent);
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.15s;
+      z-index: 2;
+      letter-spacing: 0.05em;
+    }
+
+    .upload-slot.loaded:hover .drag-hint {
+      opacity: 0.75;
     }
 
     /* ─── MAIN AREA ─── */
@@ -761,7 +871,19 @@
 
   <!-- Upload -->
   <div class="upload-section" id="uploadSection">
-    <div class="upload-meta">upload 8 pages in order — front cover first, back cover last</div>
+    <div class="upload-meta">upload 8 pages</div>
+
+    <!-- Bulk upload drop zone -->
+    <div class="bulk-drop-zone" id="bulkDropZone">
+      <input type="file" accept="image/*" multiple id="bulkInput">
+      <span class="bulk-drop-icon">⬆︎</span>
+      <div class="bulk-drop-text">
+        <strong>drop all 8 images here, or click to select</strong>
+        <span>files are assigned to slots in filename order — front cover first, back cover last</span>
+      </div>
+      <span class="bulk-progress" id="bulkProgress">0 / 8</span>
+    </div>
+
     <div class="upload-grid" id="uploadGrid"></div>
   </div>
 
@@ -872,6 +994,8 @@
     ];
 
     // ─── UPLOAD GRID ─────────────────────────────────────────────────
+    let dragSrc = null; // index of slot being dragged
+
     (function buildGrid() {
       const grid = document.getElementById('uploadGrid');
       const labels = ['1 · front', '2', '3', '4', '5', '6', '7', '8 · back'];
@@ -879,11 +1003,82 @@
         const slot = document.createElement('div');
         slot.className = 'upload-slot';
         slot.id = `slot${i}`;
-        slot.innerHTML = `<span class="slot-plus">+</span><span class="slot-lbl">${lbl}</span><input type="file" accept="image/*">`;
+        slot.innerHTML = `
+          <span class="drag-hint">drag to reorder</span>
+          <span class="slot-plus">+</span>
+          <span class="slot-lbl">${lbl}</span>
+          <input type="file" accept="image/*">`;
         slot.querySelector('input').addEventListener('change', e => loadPage(i, e.target));
+
+        // ── drag events ──
+        slot.addEventListener('dragstart', e => {
+          if (!pages[i]) { e.preventDefault(); return; }
+          dragSrc = i;
+          slot.classList.add('dragging');
+          e.dataTransfer.effectAllowed = 'move';
+        });
+        slot.addEventListener('dragend', () => {
+          slot.classList.remove('dragging');
+          document.querySelectorAll('.upload-slot').forEach(s => s.classList.remove('drag-over'));
+        });
+        slot.addEventListener('dragover', e => {
+          e.preventDefault();
+          e.dataTransfer.dropEffect = 'move';
+          if (dragSrc !== null && dragSrc !== i)
+            slot.classList.add('drag-over');
+        });
+        slot.addEventListener('dragleave', () => slot.classList.remove('drag-over'));
+        slot.addEventListener('drop', e => {
+          e.preventDefault();
+          slot.classList.remove('drag-over');
+          if (dragSrc === null || dragSrc === i) return;
+          shiftSlots(dragSrc, i);
+          dragSrc = null;
+        });
+
         grid.appendChild(slot);
       });
     })();
+
+    function shiftSlots(from, to) {
+      // Remove the dragged item and insert it at the destination,
+      // shifting everything in between by one position.
+      const [moved] = pages.splice(from, 1);
+      pages.splice(to, 0, moved);
+
+      // Refresh all 8 slot UIs since multiple positions changed
+      for (let i = 0; i < 8; i++) refreshSlotUI(i);
+
+      renderView();
+      renderPrintLayout();
+    }
+
+    function refreshSlotUI(i) {
+      const labels = ['1 · front', '2', '3', '4', '5', '6', '7', '8 · back'];
+      const slot = document.getElementById(`slot${i}`);
+      const img = slot.querySelector('img.slot-preview');
+
+      if (pages[i]) {
+        slot.classList.add('loaded');
+        slot.setAttribute('draggable', 'true');
+        if (img) {
+          img.src = pages[i];
+          img.classList.add('visible');
+        } else {
+          const newImg = document.createElement('img');
+          newImg.className = 'slot-preview visible';
+          newImg.src = pages[i];
+          slot.prepend(newImg);
+        }
+      } else {
+        slot.classList.remove('loaded');
+        slot.setAttribute('draggable', 'false');
+        if (img) {
+          img.src = '';
+          img.classList.remove('visible');
+        }
+      }
+    }
 
     function loadPage(i, input) {
       const file = input.files[0];
@@ -891,22 +1086,75 @@
       const reader = new FileReader();
       reader.onload = e => {
         pages[i] = e.target.result;
-        // update slot thumbnail
         const slot = document.getElementById(`slot${i}`);
-        slot.classList.add('loaded');
-        let img = slot.querySelector('img.slot-preview');
-        if (!img) {
-          img = document.createElement('img');
-          img.className = 'slot-preview';
-          slot.prepend(img);
-        }
-        img.src = pages[i];
-        img.classList.add('visible');
+        slot.setAttribute('draggable', 'true');
+        refreshSlotUI(i);
         renderView();
         renderPrintLayout();
+        updateBulkProgress();
       };
       reader.readAsDataURL(file);
     }
+
+    // ─── BULK UPLOAD ──────────────────────────────────────────────────
+    function updateBulkProgress() {
+      const loaded = pages.filter(Boolean).length;
+      const el = document.getElementById('bulkProgress');
+      el.textContent = `${loaded} / 8`;
+      el.classList.toggle('visible', loaded > 0);
+    }
+
+    function bulkLoad(files) {
+      if (!files || files.length === 0) return;
+      // Sort files alphabetically so naming convention (01_cover, 02_page…) works naturally
+      const sorted = Array.from(files).sort((a, b) => a.name.localeCompare(b.name));
+      // Only take up to 8
+      const toLoad = sorted.slice(0, 8);
+      toLoad.forEach((file, i) => {
+        const reader = new FileReader();
+        reader.onload = e => {
+          pages[i] = e.target.result;
+          document.getElementById(`slot${i}`).setAttribute('draggable', 'true');
+          refreshSlotUI(i);
+          renderView();
+          renderPrintLayout();
+          updateBulkProgress();
+        };
+        reader.readAsDataURL(file);
+      });
+    }
+
+    // Wire up bulk input
+    document.getElementById('bulkInput').addEventListener('change', function () {
+      bulkLoad(this.files);
+      // Reset so same files can be re-selected if needed
+      this.value = '';
+    });
+
+    // Drag-and-drop onto the bulk zone from the OS file system
+    (function wireBulkDrop() {
+      const zone = document.getElementById('bulkDropZone');
+
+      zone.addEventListener('dragenter', e => {
+        e.preventDefault();
+        // Only activate for file drags (not slot-reorder drags)
+        if (e.dataTransfer.types.includes('Files')) zone.classList.add('drag-active');
+      });
+      zone.addEventListener('dragover', e => {
+        e.preventDefault();
+        if (e.dataTransfer.types.includes('Files')) e.dataTransfer.dropEffect = 'copy';
+      });
+      zone.addEventListener('dragleave', e => {
+        if (!zone.contains(e.relatedTarget)) zone.classList.remove('drag-active');
+      });
+      zone.addEventListener('drop', e => {
+        e.preventDefault();
+        zone.classList.remove('drag-active');
+        if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+          bulkLoad(e.dataTransfer.files);
+        }
+      });
+    })();
 
     // ─── VIEWER ──────────────────────────────────────────────────────
     function navigate(dir) {
