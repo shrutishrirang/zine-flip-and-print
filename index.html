@@ -232,6 +232,7 @@
       width: 100%;
       height: 100%;
       object-fit: cover;
+      image-orientation: from-image;
       display: none;
     }
 
@@ -368,6 +369,7 @@
       width: 100%;
       height: 100%;
       object-fit: cover;
+      image-orientation: from-image;
       display: block;
     }
 
@@ -394,6 +396,7 @@
       width: 100%;
       height: 100%;
       object-fit: cover;
+      image-orientation: from-image;
       display: block;
     }
 
@@ -686,6 +689,7 @@
       width: 100%;
       height: 100%;
       object-fit: cover;
+      image-orientation: from-image;
       display: block;
     }
 
@@ -1016,6 +1020,42 @@
           dragSrc = null;
         });
 
+        // ── touch drag events (mobile reorder) ──
+        slot.addEventListener('touchstart', e => {
+          if (!pages[i]) return;
+          dragSrc = i;
+          slot.classList.add('dragging');
+          // Prevent page scroll while dragging a slot
+          slot._touchDragging = true;
+        }, { passive: true });
+
+        slot.addEventListener('touchmove', e => {
+          if (!slot._touchDragging) return;
+          e.preventDefault(); // block scroll only while dragging a loaded slot
+          const touch = e.touches[0];
+          const el = document.elementFromPoint(touch.clientX, touch.clientY);
+          const targetSlot = el && el.closest('.upload-slot');
+          document.querySelectorAll('.upload-slot').forEach(s => s.classList.remove('drag-over'));
+          if (targetSlot && targetSlot !== slot) targetSlot.classList.add('drag-over');
+        }, { passive: false });
+
+        slot.addEventListener('touchend', e => {
+          if (!slot._touchDragging) return;
+          slot._touchDragging = false;
+          slot.classList.remove('dragging');
+          const touch = e.changedTouches[0];
+          const el = document.elementFromPoint(touch.clientX, touch.clientY);
+          const targetSlot = el && el.closest('.upload-slot');
+          document.querySelectorAll('.upload-slot').forEach(s => s.classList.remove('drag-over'));
+          if (targetSlot && targetSlot !== slot) {
+            const targetIdx = parseInt(targetSlot.id.replace('slot', ''));
+            if (!isNaN(targetIdx) && targetIdx !== dragSrc) {
+              shiftSlots(dragSrc, targetIdx);
+            }
+          }
+          dragSrc = null;
+        });
+
         grid.appendChild(slot);
       });
     })();
@@ -1060,20 +1100,116 @@
       }
     }
 
+    // ─── IMAGE RESIZE HELPER ──────────────────────────────────────────
+    // Reads a File, corrects EXIF orientation, and resizes to maxPx on the
+    // longest side. Returns a Promise<string> (JPEG data URL).
+    function resizeImage(file, maxPx = 2048) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onerror = reject;
+        reader.onload = e => {
+          const img = new Image();
+          img.onerror = reject;
+          img.onload = () => {
+            // Read EXIF orientation so we can correct it on the canvas
+            // (needed for Safari and any browser that ignores EXIF in drawImage)
+            getExifOrientation(e.target.result).then(orientation => {
+              const { w, h, transform } = getOrientedDimensions(
+                img.naturalWidth, img.naturalHeight, orientation
+              );
+              const scale = Math.min(1, maxPx / Math.max(w, h));
+              const dw = Math.round(w * scale);
+              const dh = Math.round(h * scale);
+
+              const canvas = document.createElement('canvas');
+              canvas.width  = dw;
+              canvas.height = dh;
+              const ctx = canvas.getContext('2d');
+              ctx.save();
+              applyExifTransform(ctx, dw, dh, orientation);
+              ctx.drawImage(img, 0, 0, Math.round(img.naturalWidth * scale), Math.round(img.naturalHeight * scale));
+              ctx.restore();
+              resolve(canvas.toDataURL('image/jpeg', 0.92));
+            });
+          };
+          img.src = e.target.result;
+        };
+        reader.readAsDataURL(file);
+      });
+    }
+
+    // Returns EXIF orientation (1–8) from a JPEG data URL, or 1 if absent/unreadable.
+    function getExifOrientation(dataUrl) {
+      return new Promise(resolve => {
+        try {
+          const base64 = dataUrl.split(',')[1];
+          const binary = atob(base64.slice(0, 1024)); // only need the header
+          const buf = new Uint8Array(binary.length);
+          for (let i = 0; i < binary.length; i++) buf[i] = binary.charCodeAt(i);
+          const view = new DataView(buf.buffer);
+          if (view.getUint16(0) !== 0xFFD8) return resolve(1); // not JPEG
+          let offset = 2;
+          while (offset < buf.length - 4) {
+            const marker = view.getUint16(offset);
+            const segLen  = view.getUint16(offset + 2);
+            if (marker === 0xFFE1) { // APP1 / EXIF
+              const exifOffset = offset + 4;
+              const exifHeader = String.fromCharCode(...buf.slice(exifOffset, exifOffset + 4));
+              if (exifHeader === 'Exif') {
+                const tiffOffset = exifOffset + 6;
+                const little = view.getUint16(tiffOffset) === 0x4949;
+                const getU16 = o => view.getUint16(tiffOffset + o, little);
+                const getU32 = o => view.getUint32(tiffOffset + o, little);
+                const ifdOffset = getU32(4);
+                const entries  = getU16(ifdOffset);
+                for (let i = 0; i < entries; i++) {
+                  const entryOffset = ifdOffset + 2 + i * 12;
+                  if (getU16(entryOffset) === 0x0112) { // Orientation tag
+                    return resolve(getU16(entryOffset + 8));
+                  }
+                }
+              }
+              break;
+            }
+            offset += 2 + segLen;
+          }
+          resolve(1);
+        } catch { resolve(1); }
+      });
+    }
+
+    // Returns the post-orientation logical {w, h} for a canvas.
+    function getOrientedDimensions(nw, nh, orientation) {
+      const swapped = orientation >= 5 && orientation <= 8;
+      return { w: swapped ? nh : nw, h: swapped ? nw : nh };
+    }
+
+    // Applies the canvas transform that maps EXIF orientation → normal display.
+    function applyExifTransform(ctx, dw, dh, orientation) {
+      switch (orientation) {
+        case 2: ctx.transform(-1, 0, 0, 1, dw, 0); break;
+        case 3: ctx.transform(-1, 0, 0, -1, dw, dh); break;
+        case 4: ctx.transform(1, 0, 0, -1, 0, dh); break;
+        case 5: ctx.transform(0, 1, 1, 0, 0, 0); break;
+        case 6: ctx.transform(0, 1, -1, 0, dh, 0); break;
+        case 7: ctx.transform(0, -1, -1, 0, dh, dw); break;
+        case 8: ctx.transform(0, -1, 1, 0, 0, dw); break;
+        default: break; // orientation 1 — no transform needed
+      }
+    }
+
     function loadPage(i, input) {
       const file = input.files[0];
       if (!file) return;
-      const reader = new FileReader();
-      reader.onload = e => {
-        pages[i] = e.target.result;
+      resizeImage(file).then(dataUrl => {
+        pages[i] = dataUrl;
         const slot = document.getElementById(`slot${i}`);
         slot.setAttribute('draggable', 'true');
         refreshSlotUI(i);
         renderView();
         renderPrintLayout();
         updateBulkProgress();
-      };
-      reader.readAsDataURL(file);
+      });
     }
 
     // ─── BULK UPLOAD ──────────────────────────────────────────────────
@@ -1088,19 +1224,16 @@
       if (!files || files.length === 0) return;
       // Sort files alphabetically so naming convention (01_cover, 02_page…) works naturally
       const sorted = Array.from(files).sort((a, b) => a.name.localeCompare(b.name));
-      // Only take up to 8
       const toLoad = sorted.slice(0, 8);
       toLoad.forEach((file, i) => {
-        const reader = new FileReader();
-        reader.onload = e => {
-          pages[i] = e.target.result;
+        resizeImage(file).then(dataUrl => {
+          pages[i] = dataUrl;
           document.getElementById(`slot${i}`).setAttribute('draggable', 'true');
           refreshSlotUI(i);
           renderView();
           renderPrintLayout();
           updateBulkProgress();
-        };
-        reader.readAsDataURL(file);
+        });
       });
     }
 
@@ -1337,10 +1470,17 @@
 
     function applyBackground() {
       const bg = document.getElementById('viewerBg');
-      // Size the canvas to match its rendered CSS dimensions
-      bg.width = bg.offsetWidth || bg.parentElement.offsetWidth;
-      bg.height = bg.offsetHeight || bg.parentElement.offsetHeight;
-      drawPatternCanvas(bg.getContext('2d'), bg.width, bg.height, currentPattern, currentColor);
+      const dpr = window.devicePixelRatio || 1;
+      // Size canvas in physical pixels to match screen density
+      const cssW = bg.offsetWidth  || bg.parentElement.offsetWidth;
+      const cssH = bg.offsetHeight || bg.parentElement.offsetHeight;
+      bg.width  = Math.round(cssW * dpr);
+      bg.height = Math.round(cssH * dpr);
+      bg.style.width  = cssW + 'px';
+      bg.style.height = cssH + 'px';
+      const ctx = bg.getContext('2d');
+      ctx.scale(dpr, dpr); // draw in CSS px coords; canvas handles the scaling
+      drawPatternCanvas(ctx, cssW, cssH, currentPattern, currentColor);
     }
 
     function onColorInput() {
