@@ -1103,98 +1103,138 @@
     // ─── IMAGE RESIZE HELPER ──────────────────────────────────────────
     // Reads a File, corrects EXIF orientation, and resizes to maxPx on the
     // longest side. Returns a Promise<string> (JPEG data URL).
-    function resizeImage(file, maxPx = 2048) {
+    //
+    // Strategy:
+    //   1. PRIMARY — createImageBitmap({ imageOrientation: 'from-image' })
+    //      The browser decodes the image AND applies the EXIF rotation for us,
+    //      so bitmap.width/height are already the logical (portrait/landscape)
+    //      dimensions. Supported: Chrome 52+, Firefox 93+, Safari 17+.
+    //
+    //   2. FALLBACK — manual EXIF parse + canvas transform matrix
+    //      For older Safari (< 17) which supports createImageBitmap but ignores
+    //      the imageOrientation option. We read the EXIF tag ourselves and apply
+    //      the correct affine transform before drawImage.
+    async function resizeImage(file, maxPx = 2048) {
+      // ── Path 1: native imageOrientation support ──────────────────────
+      if (typeof createImageBitmap === 'function') {
+        try {
+          const bitmap = await createImageBitmap(file, {
+            imageOrientation: 'from-image',
+            resizeQuality: 'high'
+          });
+          // bitmap.width/height already reflect the corrected orientation
+          const scale = Math.min(1, maxPx / Math.max(bitmap.width, bitmap.height));
+          const cw = Math.round(bitmap.width  * scale);
+          const ch = Math.round(bitmap.height * scale);
+          const canvas = document.createElement('canvas');
+          canvas.width = cw; canvas.height = ch;
+          canvas.getContext('2d').drawImage(bitmap, 0, 0, cw, ch);
+          bitmap.close();
+          return canvas.toDataURL('image/jpeg', 0.92);
+        } catch {
+          // imageOrientation option not supported — fall through to manual path
+        }
+      }
+
+      // ── Path 2: manual EXIF correction (older Safari fallback) ───────
       return new Promise((resolve, reject) => {
         const reader = new FileReader();
         reader.onerror = reject;
-        reader.onload = e => {
+        reader.onload = ev => {
+          const dataUrl = ev.target.result;
           const img = new Image();
           img.onerror = reject;
           img.onload = () => {
-            // Read EXIF orientation so we can correct it on the canvas
-            // (needed for Safari and any browser that ignores EXIF in drawImage)
-            getExifOrientation(e.target.result).then(orientation => {
-              const { w, h, transform } = getOrientedDimensions(
-                img.naturalWidth, img.naturalHeight, orientation
-              );
-              const scale = Math.min(1, maxPx / Math.max(w, h));
-              const dw = Math.round(w * scale);
-              const dh = Math.round(h * scale);
+            const nw = img.naturalWidth, nh = img.naturalHeight;
+            readExifOrientation(file).then(or => {
+              // Orientations 5–8 require a 90°/270° rotation → swap canvas dimensions
+              const swapped = or >= 5 && or <= 8;
+              const logW = swapped ? nh : nw; // logical width  after correction
+              const logH = swapped ? nw : nh; // logical height after correction
+              const scale = Math.min(1, maxPx / Math.max(logW, logH));
+              const cw = Math.round(logW * scale); // final canvas width
+              const ch = Math.round(logH * scale); // final canvas height
 
               const canvas = document.createElement('canvas');
-              canvas.width  = dw;
-              canvas.height = dh;
+              canvas.width = cw; canvas.height = ch;
               const ctx = canvas.getContext('2d');
               ctx.save();
-              applyExifTransform(ctx, dw, dh, orientation);
-              ctx.drawImage(img, 0, 0, Math.round(img.naturalWidth * scale), Math.round(img.naturalHeight * scale));
+              correctExifOrientation(ctx, cw, ch, or);
+              // Draw at natural (pre-rotation) scaled dimensions — the transform handles rotation
+              ctx.drawImage(img, 0, 0, Math.round(nw * scale), Math.round(nh * scale));
               ctx.restore();
               resolve(canvas.toDataURL('image/jpeg', 0.92));
             });
           };
-          img.src = e.target.result;
+          img.src = dataUrl;
         };
         reader.readAsDataURL(file);
       });
     }
 
-    // Returns EXIF orientation (1–8) from a JPEG data URL, or 1 if absent/unreadable.
-    function getExifOrientation(dataUrl) {
+    // Reads the EXIF orientation tag (1–8) directly from a File's binary.
+    // Reads 64 KB — enough to cover any real-world JPEG EXIF block.
+    function readExifOrientation(file) {
       return new Promise(resolve => {
-        try {
-          const base64 = dataUrl.split(',')[1];
-          const binary = atob(base64.slice(0, 1024)); // only need the header
-          const buf = new Uint8Array(binary.length);
-          for (let i = 0; i < binary.length; i++) buf[i] = binary.charCodeAt(i);
-          const view = new DataView(buf.buffer);
-          if (view.getUint16(0) !== 0xFFD8) return resolve(1); // not JPEG
-          let offset = 2;
-          while (offset < buf.length - 4) {
-            const marker = view.getUint16(offset);
-            const segLen  = view.getUint16(offset + 2);
-            if (marker === 0xFFE1) { // APP1 / EXIF
-              const exifOffset = offset + 4;
-              const exifHeader = String.fromCharCode(...buf.slice(exifOffset, exifOffset + 4));
-              if (exifHeader === 'Exif') {
-                const tiffOffset = exifOffset + 6;
-                const little = view.getUint16(tiffOffset) === 0x4949;
-                const getU16 = o => view.getUint16(tiffOffset + o, little);
-                const getU32 = o => view.getUint32(tiffOffset + o, little);
-                const ifdOffset = getU32(4);
-                const entries  = getU16(ifdOffset);
-                for (let i = 0; i < entries; i++) {
-                  const entryOffset = ifdOffset + 2 + i * 12;
-                  if (getU16(entryOffset) === 0x0112) { // Orientation tag
-                    return resolve(getU16(entryOffset + 8));
+        const blob = file.slice(0, 65536);
+        const fr = new FileReader();
+        fr.onerror = () => resolve(1);
+        fr.onload = ev => {
+          try {
+            const buf  = ev.target.result;
+            const view = new DataView(buf);
+            if (view.getUint16(0) !== 0xFFD8) return resolve(1); // not JPEG
+            let offset = 2;
+            while (offset + 4 <= buf.byteLength) {
+              const marker = view.getUint16(offset);
+              const segLen  = view.getUint16(offset + 2); // segment length incl. length field
+              if (marker === 0xFFE1) { // APP1 — EXIF lives here
+                const hdr = String.fromCharCode(
+                  view.getUint8(offset + 4), view.getUint8(offset + 5),
+                  view.getUint8(offset + 6), view.getUint8(offset + 7)
+                );
+                if (hdr === 'Exif') {
+                  const tiff   = offset + 10; // start of TIFF header inside APP1
+                  const little = view.getUint16(tiff) === 0x4949;
+                  const u16 = o => view.getUint16(tiff + o, little);
+                  const u32 = o => view.getUint32(tiff + o, little);
+                  const ifd  = u32(4);
+                  const n    = u16(ifd);
+                  for (let i = 0; i < n; i++) {
+                    const e = ifd + 2 + i * 12;
+                    if (u16(e) === 0x0112) return resolve(u16(e + 8)); // Orientation tag value
                   }
                 }
+                return resolve(1); // APP1 found but no orientation tag
               }
-              break;
+              if ((marker & 0xFF00) !== 0xFF00) break; // not a valid marker
+              offset += 2 + segLen;
             }
-            offset += 2 + segLen;
-          }
-          resolve(1);
-        } catch { resolve(1); }
+            resolve(1);
+          } catch { resolve(1); }
+        };
+        fr.readAsArrayBuffer(blob);
       });
     }
 
-    // Returns the post-orientation logical {w, h} for a canvas.
-    function getOrientedDimensions(nw, nh, orientation) {
-      const swapped = orientation >= 5 && orientation <= 8;
-      return { w: swapped ? nh : nw, h: swapped ? nw : nh };
-    }
-
-    // Applies the canvas transform that maps EXIF orientation → normal display.
-    function applyExifTransform(ctx, dw, dh, orientation) {
-      switch (orientation) {
-        case 2: ctx.transform(-1, 0, 0, 1, dw, 0); break;
-        case 3: ctx.transform(-1, 0, 0, -1, dw, dh); break;
-        case 4: ctx.transform(1, 0, 0, -1, 0, dh); break;
-        case 5: ctx.transform(0, 1, 1, 0, 0, 0); break;
-        case 6: ctx.transform(0, 1, -1, 0, dh, 0); break;
-        case 7: ctx.transform(0, -1, -1, 0, dh, dw); break;
-        case 8: ctx.transform(0, -1, 1, 0, 0, dw); break;
-        default: break; // orientation 1 — no transform needed
+    // Applies the affine transform so that drawImage renders the raw (pre-rotation)
+    // pixels into the correctly oriented canvas space.
+    //
+    // cw / ch are the LOGICAL (post-correction) canvas dimensions.
+    // For swapped orientations (5–8): cw = nh*scale, ch = nw*scale.
+    // drawImage must be called with the NATURAL (pre-rotation) scaled size: (nw*scale, nh*scale).
+    //
+    // Each case verified: the transform maps the draw rectangle exactly onto [0,cw]×[0,ch].
+    function correctExifOrientation(ctx, cw, ch, or) {
+      switch (or) {
+        case 2: ctx.transform(-1,  0,  0,  1, cw,  0); break; // flip horizontal
+        case 3: ctx.transform(-1,  0,  0, -1, cw, ch); break; // rotate 180°
+        case 4: ctx.transform( 1,  0,  0, -1,  0, ch); break; // flip vertical
+        case 5: ctx.transform( 0,  1,  1,  0,  0,  0); break; // transpose
+        case 6: ctx.transform( 0,  1, -1,  0, cw,  0); break; // rotate 90° CW  ← was using ch (wrong)
+        case 7: ctx.transform( 0, -1, -1,  0, cw, ch); break; // transverse
+        case 8: ctx.transform( 0, -1,  1,  0,  0, ch); break; // rotate 90° CCW
+        default: break; // orientation 1 — identity, no transform needed
       }
     }
 
