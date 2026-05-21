@@ -961,6 +961,11 @@
     </div>
   </div>
 
+  <!-- Hidden high-resolution container for crisp, device-independent PDF rendering -->
+  <div id="hiddenPrintContainer" style="position: absolute; left: -9999px; top: -9999px; width: 2970px; height: 2100px; overflow: hidden; background: #ffffff;">
+    <div class="print-a4" id="highResPrintLayout" style="width: 2970px; height: 2100px; grid-template-columns: repeat(4, 1fr); grid-template-rows: repeat(2, 1fr); border: none;"></div>
+  </div>
+
   <script>
     // ─── STATE ───────────────────────────────────────────────────────
     const pages = new Array(8).fill(null);
@@ -1120,54 +1125,28 @@
     const PAGE_RATIO = 210 / 297;
 
     async function resizeImage(file, maxPx = 2048) {
-      // ── Path 1: native imageOrientation support ──────────────────────
-      if (typeof createImageBitmap === 'function') {
-        try {
-          const bitmap = await createImageBitmap(file, {
-            imageOrientation: 'from-image',
-            resizeQuality: 'high'
-          });
-          // bitmap.width/height already reflect the corrected orientation;
-          // crop to portrait A4 then resize
-          const result = cropAndResize(bitmap, bitmap.width, bitmap.height, PAGE_RATIO, maxPx);
-          bitmap.close();
-          return result.toDataURL('image/jpeg', 0.92);
-        } catch {
-          // imageOrientation option not supported — fall through to manual path
-        }
-      }
-
-      // ── Path 2: manual EXIF correction (older Safari fallback) ───────
       return new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onerror = reject;
-        reader.onload = ev => {
-          const img = new Image();
-          img.onerror = reject;
-          img.onload = () => {
-            const nw = img.naturalWidth, nh = img.naturalHeight;
-            readExifOrientation(file).then(or => {
-              // Orientations 5–8 require a 90°/270° rotation → swap logical dimensions
-              const swapped = or >= 5 && or <= 8;
-              const logW = swapped ? nh : nw;
-              const logH = swapped ? nw : nh;
-
-              // Draw the EXIF-corrected image into an intermediate canvas at
-              // full logical resolution, then hand it to cropAndResize.
-              const tmp = document.createElement('canvas');
-              tmp.width = logW; tmp.height = logH;
-              const tc = tmp.getContext('2d');
-              tc.save();
-              correctExifOrientation(tc, logW, logH, or);
-              tc.drawImage(img, 0, 0, nw, nh);
-              tc.restore();
-
-              resolve(cropAndResize(tmp, logW, logH, PAGE_RATIO, maxPx).toDataURL('image/jpeg', 0.92));
-            });
-          };
-          img.src = ev.target.result;
+        const url = URL.createObjectURL(file);
+        const img = new Image();
+        img.onerror = err => {
+          URL.revokeObjectURL(url);
+          reject(err);
         };
-        reader.readAsDataURL(file);
+        img.onload = () => {
+          // Modern mobile and desktop browsers automatically apply EXIF orientation.
+          // Hence, img.naturalWidth and img.naturalHeight reflect the logical, oriented size.
+          const nw = img.naturalWidth;
+          const nh = img.naturalHeight;
+          try {
+            const canvas = cropAndResize(img, nw, nh, PAGE_RATIO, maxPx);
+            URL.revokeObjectURL(url);
+            resolve(canvas.toDataURL('image/jpeg', 0.95));
+          } catch (e) {
+            URL.revokeObjectURL(url);
+            reject(e);
+          }
+        };
+        img.src = url;
       });
     }
 
@@ -1199,72 +1178,6 @@
       canvas.width = outW; canvas.height = outH;
       canvas.getContext('2d').drawImage(src, cropX, cropY, cropW, cropH, 0, 0, outW, outH);
       return canvas;
-    }
-
-    // Reads the EXIF orientation tag (1–8) directly from a File's binary.
-    // Reads 64 KB — enough to cover any real-world JPEG EXIF block.
-    function readExifOrientation(file) {
-      return new Promise(resolve => {
-        const blob = file.slice(0, 65536);
-        const fr = new FileReader();
-        fr.onerror = () => resolve(1);
-        fr.onload = ev => {
-          try {
-            const buf  = ev.target.result;
-            const view = new DataView(buf);
-            if (view.getUint16(0) !== 0xFFD8) return resolve(1); // not JPEG
-            let offset = 2;
-            while (offset + 4 <= buf.byteLength) {
-              const marker = view.getUint16(offset);
-              const segLen  = view.getUint16(offset + 2); // segment length incl. length field
-              if (marker === 0xFFE1) { // APP1 — EXIF lives here
-                const hdr = String.fromCharCode(
-                  view.getUint8(offset + 4), view.getUint8(offset + 5),
-                  view.getUint8(offset + 6), view.getUint8(offset + 7)
-                );
-                if (hdr === 'Exif') {
-                  const tiff   = offset + 10; // start of TIFF header inside APP1
-                  const little = view.getUint16(tiff) === 0x4949;
-                  const u16 = o => view.getUint16(tiff + o, little);
-                  const u32 = o => view.getUint32(tiff + o, little);
-                  const ifd  = u32(4);
-                  const n    = u16(ifd);
-                  for (let i = 0; i < n; i++) {
-                    const e = ifd + 2 + i * 12;
-                    if (u16(e) === 0x0112) return resolve(u16(e + 8)); // Orientation tag value
-                  }
-                }
-                return resolve(1); // APP1 found but no orientation tag
-              }
-              if ((marker & 0xFF00) !== 0xFF00) break; // not a valid marker
-              offset += 2 + segLen;
-            }
-            resolve(1);
-          } catch { resolve(1); }
-        };
-        fr.readAsArrayBuffer(blob);
-      });
-    }
-
-    // Applies the affine transform so that drawImage renders the raw (pre-rotation)
-    // pixels into the correctly oriented canvas space.
-    //
-    // cw / ch are the LOGICAL (post-correction) canvas dimensions.
-    // For swapped orientations (5–8): cw = nh*scale, ch = nw*scale.
-    // drawImage must be called with the NATURAL (pre-rotation) scaled size: (nw*scale, nh*scale).
-    //
-    // Each case verified: the transform maps the draw rectangle exactly onto [0,cw]×[0,ch].
-    function correctExifOrientation(ctx, cw, ch, or) {
-      switch (or) {
-        case 2: ctx.transform(-1,  0,  0,  1, cw,  0); break; // flip horizontal
-        case 3: ctx.transform(-1,  0,  0, -1, cw, ch); break; // rotate 180°
-        case 4: ctx.transform( 1,  0,  0, -1,  0, ch); break; // flip vertical
-        case 5: ctx.transform( 0,  1,  1,  0,  0,  0); break; // transpose
-        case 6: ctx.transform( 0,  1, -1,  0, cw,  0); break; // rotate 90° CW  ← was using ch (wrong)
-        case 7: ctx.transform( 0, -1, -1,  0, cw, ch); break; // transverse
-        case 8: ctx.transform( 0, -1,  1,  0,  0, ch); break; // rotate 90° CCW
-        default: break; // orientation 1 — identity, no transform needed
-      }
     }
 
     function loadPage(i, input) {
@@ -1583,6 +1496,7 @@
 
     function renderPrintLayout() {
       const layout = document.getElementById('printLayout');
+      const highResLayout = document.getElementById('highResPrintLayout');
       if (!layout) return;
       let html = '';
 
@@ -1611,6 +1525,9 @@
   </div>`;
 
       layout.innerHTML = html;
+      if (highResLayout) {
+        highResLayout.innerHTML = html;
+      }
     }
 
     function openPrint() {
@@ -1636,14 +1553,14 @@
     function loadSide2(input) {
       const file = input.files[0];
       if (!file) return;
-      const reader = new FileReader();
-      reader.onload = e => {
-        const img = document.getElementById('side2Img');
-        img.src = e.target.result;
-        img.classList.add('visible');
-        document.getElementById('side2Hint').style.display = 'none';
-      };
-      reader.readAsDataURL(file);
+      const img = document.getElementById('side2Img');
+      if (img.src && img.src.startsWith('blob:')) {
+        URL.revokeObjectURL(img.src);
+      }
+      const url = URL.createObjectURL(file);
+      img.src = url;
+      img.classList.add('visible');
+      document.getElementById('side2Hint').style.display = 'none';
     }
 
     async function triggerPrint() {
@@ -1658,15 +1575,15 @@
         // A4 landscape: 297mm wide × 210mm tall
         const W = 297, H = 210;
 
-        // ── Side 1: capture the live print layout ──
-        const layout1 = document.getElementById('printLayout');
-        const canvas1 = await html2canvas(layout1, {
-          scale: 3,
+        // ── Side 1: capture the hidden high-res print layout ──
+        const highResLayout = document.getElementById('highResPrintLayout');
+        const canvas1 = await html2canvas(highResLayout, {
+          scale: 1, // 1x scale of 2970x2100 is already extremely sharp (300+ DPI print resolution)
           useCORS: true,
           backgroundColor: '#ffffff',
           logging: false
         });
-        doc.addImage(canvas1.toDataURL('image/jpeg', 0.97), 'JPEG', 0, 0, W, H);
+        doc.addImage(canvas1.toDataURL('image/jpeg', 0.98), 'JPEG', 0, 0, W, H);
 
         // ── Side 2: add raw image if uploaded ──
         const side2Img = document.getElementById('side2Img');
